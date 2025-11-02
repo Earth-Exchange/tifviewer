@@ -132,7 +132,8 @@ viewtif data.nc
 Longenecker, Jake; Lee, Christine; Hulley, Glynn; Cawse-Nicholson, Kerry; Purkis, Sam; Gleason, Art; Otis, Dan; Galdamez, Ileana; Meiseles, Jacquelyn. GeoViewer v1.12: NASA JPL Thermal Viewer—Semi-Automated Georeferencer User Guide & Reference Manual. Jet Propulsion Laboratory, California Institute of Technology, 2025. PDF.
 
 ## License
-This project is released under the MIT License.
+This project is released under the MIT License © 2025 Keiko Nomura 
+If you find this tool useful, please consider supporting or acknowledging the author. 
 
 ## Contributors
 - [@HarshShinde0](https://github.com/HarshShinde0) — added mouse-wheel and trackpad zoom support; added NetCDF support with [@nkeikon](https://github.com/nkeikon) 
