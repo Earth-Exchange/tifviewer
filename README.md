@@ -131,16 +131,18 @@ viewtif data.nc
 ## Citation
 Longenecker, Jake; Lee, Christine; Hulley, Glynn; Cawse-Nicholson, Kerry; Purkis, Sam; Gleason, Art; Otis, Dan; Galdamez, Ileana; Meiseles, Jacquelyn. GeoViewer v1.12: NASA JPL Thermal Viewer—Semi-Automated Georeferencer User Guide & Reference Manual. Jet Propulsion Laboratory, California Institute of Technology, 2025. PDF.
 
-## License
-This project is released under the MIT License © 2025 Keiko Nomura 
-If you find this tool useful, please consider supporting or acknowledging the author. 
-
 ## Contributors
 - [@HarshShinde0](https://github.com/HarshShinde0) — added mouse-wheel and trackpad zoom support; added NetCDF support with [@nkeikon](https://github.com/nkeikon) 
 - [@p-vdp](https://github.com/p-vdp) — added File Geodatabase (.gdb) raster support
+
+## License
+This project is released under the MIT License © 2025 Keiko Nomura.
+
+If you find this tool useful, please consider supporting or acknowledging the author. 
 
 ## Useful links
 - [Demo by User](https://www.linkedin.com/posts/desmond-lartey_geospatial-analysts-heads-up-check-out-activity-7386336488050925568-G5bN?utm_source=share&utm_medium=member_desktop&rcm=ACoAAAA0INsBVIO1f6nS_NkKqFh4Na1ZpoYo2fc)
 - [Demo at the initial release](https://www.linkedin.com/posts/keiko-nomura-0231891_dont-you-sometimes-just-want-to-see-a-activity-7383409138296528896-sbRM?utm_source=share&utm_medium=member_desktop&rcm=ACoAAAA0INsBVIO1f6nS_NkKqFh4Na1ZpoYo2fc)
 - [Demo on HDF files](https://www.linkedin.com/posts/keiko-nomura-0231891_now-you-can-see-hdf-files-from-the-command-activity-7383963721561399296-F5i0?utm_source=share&utm_medium=member_desktop&rcm=ACoAAAA0INsBVIO1f6nS_NkKqFh4Na1ZpoYo2fc)
 - [Demo on NetCDF files](https://www.linkedin.com/posts/keiko-nomura-0231891_you-can-now-view-netcdf-files-nc-from-activity-7386189562072670208-3A0V?utm_source=share&utm_medium=member_desktop&rcm=ACoAAAA0INsBVIO1f6nS_NkKqFh4Na1ZpoYo2fc)
+- [Demo on Esri Geodatabases](https://www.linkedin.com/posts/keiko-nomura-0231891_did-you-know-viewtif-now-supports-esri-geodatabases-activity-7390165568688959488-pvpk?utm_source=share&utm_medium=member_desktop&rcm=ACoAAAA0INsBVIO1f6nS_NkKqFh4Na1ZpoYo2fc)
