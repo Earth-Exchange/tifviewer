@@ -15,7 +15,7 @@ Controls
   Arrow keys or WASD : pan
   C / V : increase/decrease contrast (works in RGB and single-band)
   G / H : increase/decrease gamma    (works in RGB and single-band)
-  M     : toggle colormap (viridis <-> magma) — single-band only
+  M     : toggle colormap. Single-band: viridis/magma. NetCDF: RdBu_r/viridis/magma.
   [ / ] : previous / next band (or time step) (single-band)
   R     : reset view
 
@@ -27,13 +27,12 @@ Examples
 
 import sys
 import os
-import argparse
 import numpy as np
 import rasterio
 from rasterio.transform import Affine
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, 
-    QScrollBar, QGraphicsPathItem, QVBoxLayout, QHBoxLayout, QWidget, QStatusBar
+    QScrollBar, QGraphicsPathItem, QVBoxLayout, QWidget, QStatusBar
 )
 from PySide6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QPainterPath
 from PySide6.QtCore import Qt
@@ -41,8 +40,10 @@ from PySide6.QtCore import Qt
 import matplotlib.cm as cm
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="shapely")
+warnings.filterwarnings("ignore", category=UserWarning, module="rasterio")
+warnings.filterwarnings("ignore", category=UserWarning, module="xarray")
 
-__version__ = "0.2.5"
+__version__ = "0.2.6"
 
 # Optional overlay deps
 try:
@@ -166,9 +167,13 @@ class TiffViewer(QMainWindow):
         rgb: list[int] | None = None,
         rgbfiles: list[str] | None = None,
         shapefiles: list[str] | None = None,
-        shp_color: str = "white",
+        shp_color: str = "cyan",
         shp_width: float = 2,
         subset: int | None = None,
+        vmin: float | None = None,
+        vmax: float | None = None,
+        cartopy: str = "on",
+        timestep: int | None = None,
     ):
         super().__init__()
 
@@ -177,6 +182,13 @@ class TiffViewer(QMainWindow):
         self.band = int(band)
         self.rgb = rgb
         self.rgbfiles = rgbfiles
+        self._user_vmin = vmin
+        self._user_vmax = vmax
+        self.cartopy_mode = cartopy.lower()
+
+        if not tif_path and not rgbfiles:
+           print("Usage: viewtif <file.tif>")
+           sys.exit(1)
 
         self._scale_arg = max(1, int(scale or 1))
         self._transform: Affine | None = None
@@ -206,41 +218,53 @@ class TiffViewer(QMainWindow):
             self.data = arr
             self.band_count = 3
             self.rgb = [os.path.basename(red), os.path.basename(green), os.path.basename(blue)]
-            # Use common prefix for title if tif_path not passed
             self.tif_path = self.tif_path or (os.path.commonprefix([red, green, blue]) or red)
 
         elif tif_path:
-             # ---------------- Handle File Geodatabase (.gdb) ---------------- #
-            if tif_path and tif_path.lower().endswith(".gdb") and ":" not in tif_path:
+
+            # ---------------- Handle File Geodatabase (.gdb) ---------------- #
+            if tif_path.lower().endswith(".gdb") and ":" not in tif_path:
+                
                 import re, subprocess
-                gdb_path = tif_path  # use full path to .gdb
+                gdb_path = tif_path
+
                 try:
-                    out = subprocess.check_output(["gdalinfo", "-norat", gdb_path], text=True)
+                    out = subprocess.check_output(
+                        ["gdalinfo", "-norat", gdb_path],
+                        text=True
+                    )
                     rasters = re.findall(r"RASTER_DATASET=(\S+)", out)
+
                     if not rasters:
                         print(f"[WARN] No raster datasets found in {os.path.basename(gdb_path)}.")
                         sys.exit(0)
-                    else:
-                        print(f"Found {len(rasters)} raster dataset{'s' if len(rasters) > 1 else ''}:")
-                        for i, r in enumerate(rasters):
-                            print(f"[{i}] {r}")
-                        print("\nUse one of these names to open. For example, to open the first raster:")
-                        print(f'viewtif "OpenFileGDB:{gdb_path}:{rasters[0]}"')
-                        sys.exit(0)
-                except subprocess.CalledProcessError as e:
-                    print(f"[WARN] Could not inspect FileGDB: {e}")
+
+                    print(f"Found {len(rasters)} raster dataset{'s' if len(rasters) > 1 else ''}:")
+                    for i, r in enumerate(rasters):
+                        print(f"[{i}] {r}")
+
+                    print("\nUse one of these names to open. For example, to open the first raster:")
+                    print(f'viewtif "OpenFileGDB:{gdb_path}:{rasters[0]}"')
                     sys.exit(0)
 
-           # --- Warn for large files before loading ---
+                except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                    print("[ERROR] This file requires full GDAL support.")
+                    sys.exit(1)
+
+            # Warn for large files
             warn_if_large(tif_path, scale=self._scale_arg)
 
-           # --------------------- Detect NetCDF --------------------- #
-            if tif_path and tif_path.lower().endswith((".nc", ".netcdf")):
-                try:
-                    # Lazy-load NetCDF dependencies
-                    import xarray as xr
-                    import pandas as pd
-                    
+            # ---------------------------------------------------------------
+            # Detect NetCDF
+            # ---------------------------------------------------------------
+            if tif_path.lower().endswith((".nc", ".netcdf")):
+                    try:
+                        import xarray as xr
+                    except ModuleNotFoundError:
+                        print("NetCDF support requires extra dependencies.")
+                        print("Install them with: pip install viewtif[netcdf]")
+                        sys.exit(0)
+
                     # Open the NetCDF file
                     ds = xr.open_dataset(tif_path)
                     
@@ -270,11 +294,11 @@ class TiffViewer(QMainWindow):
                     
                     # Get coordinate info if available
                     self._has_geo_coords = False
-                    if 'lon' in ds.coords and 'lat' in ds.coords:
+                    if "lon" in ds.coords and "lat" in ds.coords:
                         self._has_geo_coords = True
                         self._lon_data = ds.lon.values
                         self._lat_data = ds.lat.values
-                    elif 'longitude' in ds.coords and 'latitude' in ds.coords:
+                    elif "longitude" in ds.coords and "latitude" in ds.coords:
                         self._has_geo_coords = True
                         self._lon_data = ds.longitude.values
                         self._lat_data = ds.latitude.values
@@ -282,29 +306,18 @@ class TiffViewer(QMainWindow):
                     # Handle time or other index dimension if present
                     self._has_time_dim = False
                     self._time_dim_name = None
-                    time_index = 0
                     
                     # Look for a time dimension first
                     if 'time' in var_data.dims:
                         self._has_time_dim = True
-                        self._time_dim_name = 'time'
-                        self._time_values = ds['time'].values
+                        self._time_dim_name = "time"
+                        self._time_values = ds["time"].values
                         self._time_index = 0
                         print(f"NetCDF time dimension detected: {len(self._time_values)} steps")
-
-                        self.band_count = var_data.sizes['time']
+                        self.band_count = var_data.sizes["time"]
                         self.band_index = 0
-                        self._time_dim_name = 'time'
+                        var_data = var_data.isel(time=0)
 
-                        # Try to format time values for better display
-                        time_units = getattr(ds.time, 'units', None)
-                        time_calendar = getattr(ds.time, 'calendar', 'standard')
-                        
-                        # Select first time step by default
-                        var_data = var_data.isel(time=time_index)
-                    
-                    # If no time dimension but variable has multiple dimensions, 
-                    # use the first non-spatial dimension as a "time" dimension
                     elif len(var_data.dims) > 2:
                         # Try to find a dimension that's not lat/lon
                         spatial_dims = ['lat', 'lon', 'latitude', 'longitude', 'y', 'x']
@@ -313,91 +326,73 @@ class TiffViewer(QMainWindow):
                                 self._has_time_dim = True
                                 self._time_dim_name = dim
                                 self._time_values = ds[dim].values
-                                self._time_index = time_index
-                                
-                                # Select first index by default
-                                var_data = var_data.isel({dim: time_index})
+                                self._time_index = 0
+                                var_data = var_data.isel({dim: 0})
                                 break
-                    
-                    # Convert to numpy array
+
                     arr = var_data.values.astype(np.float32)
-                    
-                    # Process array based on dimensions
-                    if arr.ndim > 2:
-                        # Keep only lat/lon dimensions for 3D+ arrays
-                        arr = np.squeeze(arr)
-                    
-                    # --- Downsample large arrays for responsiveness ---
+                    arr = np.squeeze(arr)
+
+                    # --------------------------------------------------------
+                    # Apply timestep jump after base array is created
+                    # --------------------------------------------------------
+                    if timestep is not None and self._has_time_dim:
+                        ts = max(1, min(timestep, self.band_count))
+                        self.band_index = ts - 1
+                        print(f"[INFO] Jumping to timestep {ts}/{self.band_count}")
+
+                        # Replace arr with the correct slice
+                        frame = self._nc_var_data.isel({self._time_dim_name: self.band_index})
+                        arr = np.squeeze(frame.values.astype(np.float32))
+
                     if arr.ndim >= 2:
                         h, w = arr.shape[:2]
                         if h * w > 4_000_000:
                             step = max(2, int((h * w / 4_000_000) ** 0.5))
-                            if arr.ndim == 2:
-                                arr = arr[::step, ::step]
-                            else:
-                                arr = arr[::step, ::step, :]
-                    
-                    # --- Final assignments ---
+                            arr = arr[::step, ::step]
+
                     self.data = arr
                     
                     # Try to extract CRS from CF conventions
                     self._transform = None
                     self._crs = None
-                    if 'crs' in ds.variables:
+
+                    if "crs" in ds.variables:
                         try:
                             import rasterio.crs
-                            crs_var = ds.variables['crs']
-                            if hasattr(crs_var, 'spatial_ref'):
+                            crs_var = ds.variables["crs"]
+                            if hasattr(crs_var, "spatial_ref"):
                                 self._crs = rasterio.crs.CRS.from_wkt(crs_var.spatial_ref)
                         except Exception as e:
                             print(f"Could not parse CRS: {e}")
-                    
-                    # Set band info
-                    if arr.ndim == 3:
-                        self.band_count = arr.shape[2]
-                    else:
-                        self.band_count = 1
-                    
-                    self.band_index = 0
-                    self.vmin, self.vmax = np.nanmin(arr), np.nanmax(arr)
-                    
-                    # --- If user specified --band, start there ---
-                    if self.band and self.band <= self.band_count:
-                        self.band_index = self.band - 1
-                    
-                    # Enable cartopy visualization if available
-                    self._use_cartopy = HAVE_CARTOPY and self._has_geo_coords
-                    
-                except ImportError as e:
-                    if "xarray" in str(e) or "netCDF4" in str(e):
-                        raise RuntimeError(
-                            f"NetCDF support requires additional dependencies.\n"
-                            f"Install them with: pip install viewtif[netcdf]\n"
-                            f"Original error: {str(e)}"
-                        )
-                    else:
-                        raise RuntimeError(f"Error reading NetCDF file: {str(e)}")
-                except Exception as e:
-                    raise RuntimeError(f"Error reading NetCDF file: {str(e)}")
-            
 
-            # # --- Universal size check before loading ---
-            # warn_if_large(tif_path, scale=self._scale_arg)
-            
-            if False:  # Placeholder for previous if condition
-                pass
-            # --------------------- Detect HDF/HDF5 --------------------- #
-            elif tif_path and tif_path.lower().endswith((".hdf", ".h5", ".hdf5")):
+                    # Preserve time dimension if detected earlier
+                    if not self._has_time_dim:
+                        self.band_count = 1
+                        self.band_index = 0
+
+                    self.vmin, self.vmax = np.nanmin(arr), np.nanmax(arr)
+
+                    if self._user_vmin is not None:
+                        self.vmin = self._user_vmin
+                    if self._user_vmax is not None:
+                        self.vmax = self._user_vmax
+
+                    self._use_cartopy = HAVE_CARTOPY and self._has_geo_coords
+
+            # ---------------------------------------------------------------
+            # Detect HDF or HDF5
+            # ---------------------------------------------------------------
+            elif tif_path.lower().endswith((".hdf", ".h5", ".hdf5")):
                 try:
-                    # Try GDAL first (best support for HDF subdatasets)
                     from osgeo import gdal
-                    gdal.UseExceptions()
+                    # gdal.UseExceptions()
 
                     ds = gdal.Open(tif_path)
                     subs = ds.GetSubDatasets()
 
                     if not subs:
-                        raise ValueError("No subdatasets found in HDF/HDF5 file.")
+                        raise ValueError("No subdatasets found in HDF file.")
 
                     # Only list subsets if --subset not given
                     if subset is None:
@@ -409,18 +404,15 @@ class TiffViewer(QMainWindow):
 
                     # Validate subset index
                     if subset < 0 or subset >= len(subs):
-                        raise ValueError(f"Invalid subset index {subset}. Valid range: 0–{len(subs)-1}")
+                        raise ValueError(f"Invalid subset index {subset}.")
 
                     sub_name, desc = subs[subset]
                     print(f"\nOpening subdataset [{subset}]: {desc}")
                     sub_ds = gdal.Open(sub_name)
 
-                    # --- Read once ---
                     arr = sub_ds.ReadAsArray().astype(np.float32)
-                    #print(f"Raw array shape from GDAL: {arr.shape} (ndim={arr.ndim})")
-
-                    # --- Normalize shape ---
                     arr = np.squeeze(arr)
+
                     if arr.ndim == 3:
                         # Convert from (bands, rows, cols) → (rows, cols, bands)
                         arr = np.transpose(arr, (1, 2, 0))
@@ -436,93 +428,46 @@ class TiffViewer(QMainWindow):
                         step = max(2, int((h * w / 4_000_000) ** 0.5))
                         arr = arr[::step, ::step] if arr.ndim == 2 else arr[::step, ::step, :]
 
-                    # --- Final assignments ---
                     self.data = arr
                     self._transform = None
                     self._crs = None
                     self.band_count = arr.shape[2] if arr.ndim == 3 else 1
                     self.band_index = 0
                     self.vmin, self.vmax = np.nanmin(arr), np.nanmax(arr)
-
-                    if self.band_count > 1:
-                        print(f"This subdataset has {self.band_count} bands — switch with [ and ] keys.")
+                    if getattr(self, "_scale_arg", 1) > 1:
+                        print(f"[INFO] Value range (scaled): {self.vmin:.3f} -> {self.vmax:.3f}")
                     else:
-                        print("This subdataset has 1 band.")
+                        print(f"[INFO] Value range: {self.vmin:.3f} -> {self.vmax:.3f}")
 
-                        if self.band and self.band <= self.band_count:
-                            self.band_index = self.band - 1
-                            print(f"Opening band {self.band}/{self.band_count}")
+                except ImportError as e:
+                    if "osgeo" in str(e):
+                        print("[ERROR] This file requires full GDAL support.")
+                        # print("Install GDAL with:")
+                        # print("  conda install -c conda-forge gdal")
+                        sys.exit(1)
+                    else:
+                        print(f"Error reading HDF file: {e}")
+                        sys.exit(1)
 
-                except ImportError:
-                    # GDAL not available, try rasterio as fallback for NetCDF
-                    print("[INFO] GDAL not available, attempting to read HDF/NetCDF with rasterio...")
-                    try:
-                        import rasterio as rio
-                        with rio.open(tif_path) as src:
-                            print(f"[INFO] NetCDF file opened via rasterio")
-                            print(f"[INFO] Data shape: {src.height} x {src.width} x {src.count} bands")
-                            
-                            if src.count == 0:
-                                raise ValueError("No bands found in NetCDF file.")
-                            
-                            # Determine which band(s) to read
-                            if self.band and self.band <= src.count:
-                                band_indices = [self.band]
-                                print(f"Opening band {self.band}/{src.count}")
-                            elif rgb and all(b <= src.count for b in rgb):
-                                band_indices = rgb
-                                print(f"Opening bands {rgb} as RGB")
-                            else:
-                                band_indices = list(range(1, min(src.count + 1, 4)))  # Read up to 3 bands
-                                print(f"Opening bands {band_indices}")
-                            
-                            # Read selected bands
-                            bands = []
-                            for b in band_indices:
-                                band_data = src.read(b, out_shape=(src.height // self._scale_arg, src.width // self._scale_arg))
-                                bands.append(band_data)
-                            
-                            # Stack into array
-                            arr = np.stack(bands, axis=-1).astype(np.float32) if len(bands) > 1 else bands[0].astype(np.float32)
-                            
-                            # Handle no-data values
-                            nd = src.nodata
-                            if nd is not None:
-                                if arr.ndim == 3:
-                                    arr[arr == nd] = np.nan
-                                else:
-                                    arr[arr == nd] = np.nan
-                            
-                            # Final assignments
-                            self.data = arr
-                            self._transform = src.transform
-                            self._crs = src.crs
-                            self.band_count = arr.shape[2] if arr.ndim == 3 else 1
-                            self.band_index = 0
-                            self.vmin, self.vmax = np.nanmin(arr), np.nanmax(arr)
-                            
-                            if self.band_count > 1:
-                                print(f"Loaded {self.band_count} bands — switch with [ and ] keys.")
-                            else:
-                                print("Loaded 1 band.")
-                    except Exception as e:
-                        raise RuntimeError(
-                            f"Failed to read HDF/NetCDF file: {e}\n"
-                            "For full HDF support, install GDAL: pip install GDAL"
-                        )
+                except Exception as e:
+                    print(f"Error reading HDF file: {e}")
+                    sys.exit(1)
 
-            # --------------------- Regular GeoTIFF --------------------- #
+            # ---------------------------------------------------------------
+            # Regular TIFF
+            # ---------------------------------------------------------------
             else:
-                if tif_path and os.path.dirname(tif_path).endswith(".gdb"):
-                    tif_path = f"OpenFileGDB:{os.path.dirname(tif_path)}:{os.path.basename(tif_path)}"
-
                 import rasterio as rio_module
                 with rio_module.open(tif_path) as src:
                     self._transform = src.transform
                     self._crs = src.crs
+
                     if rgb is not None:
-                        bands = [src.read(b, out_shape=(src.height // self._scale_arg, src.width // self._scale_arg))
-                                for b in rgb]
+                        bands = [
+                            src.read(b, out_shape=(src.height // self._scale_arg, src.width // self._scale_arg))
+                            for b in rgb
+                        ]
+                        
                         arr = np.stack(bands, axis=-1).astype(np.float32)
                         nd = src.nodata
                         if nd is not None:
@@ -540,7 +485,14 @@ class TiffViewer(QMainWindow):
                         self.data = arr
                         self.band_count = src.count
 
-                        # single-band display range (fast stats or fallback)
+                        if self.band_count == 1:
+                            print("[INFO] This TIFF has 1 band.")
+                        else:
+                            print(
+                                f"[INFO] This TIFF has {self.band_count} bands. "
+                                "Use [ and ] to switch bands, or use --rgb R G B."
+                            )
+
                         try:
                             stats = src.stats(self.band)
                             if stats and stats.min is not None and stats.max is not None:
@@ -549,9 +501,10 @@ class TiffViewer(QMainWindow):
                                 raise ValueError("No stats in file")
                         except Exception:
                             self.vmin, self.vmax = np.nanmin(arr), np.nanmax(arr)
-
-        else:
-            raise ValueError("Provide a TIFF path or --rgbfiles.")
+                            if getattr(self, "_scale_arg", 1) > 1:
+                                print(f"[INFO] Value range (scaled): {self.vmin:.3f} -> {self.vmax:.3f}")
+                            else:
+                                print(f"[INFO] Value range: {self.vmin:.3f} -> {self.vmax:.3f}")
 
         # Window title
         self.update_title()
@@ -561,7 +514,6 @@ class TiffViewer(QMainWindow):
         self.gamma = 1.0
 
         # Colormap (single-band)
-        # For NetCDF temperature data, have three colormaps in rotation
         if tif_path and tif_path.lower().endswith(('.nc', '.netcdf')):
             self.cmap_names = ["RdBu_r", "viridis", "magma"]  # three colormaps for NetCDF
             self.cmap_index = 0  # start with RdBu_r
@@ -594,7 +546,9 @@ class TiffViewer(QMainWindow):
         self._last_rgb = None
 
         # --- Initial render ---
+        self._suppress_scale_print = True # Need for NetCDF
         self.update_pixmap()
+        self._suppress_scale_print = False # Need for NetCDF
 
         # Overlays (if any)
         if self._shapefiles:
@@ -605,9 +559,32 @@ class TiffViewer(QMainWindow):
         if self.pixmap_item is not None:
             rect = self.pixmap_item.boundingRect()
             self.scene.setSceneRect(rect)
+
+            # Fit first
             self.view.fitInView(self.pixmap_item, Qt.AspectRatioMode.KeepAspectRatioByExpanding)
-            self.view.scale(5, 5)
+
+            # ----------------------------
+            # NetCDF needs a different scaling (appears smaller)
+            # ----------------------------
+            if hasattr(self, "_nc_var_name"):
+                # NetCDF view adjustment
+                self.view.scale(11.0, 11.0)
+            else:
+                # Default behavior for TIFF/HDF imagery
+                self.view.scale(7.0, 7.0)
+
             self.view.centerOn(self.pixmap_item)
+            
+        # Previous version below
+        # # --- Initial render ---
+        # self.update_pixmap()
+        # self.resize(1200, 800) 
+        # if self.pixmap_item is not None:
+        #     rect = self.pixmap_item.boundingRect()
+        #     self.scene.setSceneRect(rect)
+        #     self.view.fitInView(self.pixmap_item, Qt.AspectRatioMode.KeepAspectRatioByExpanding)
+        #     self.view.scale(5, 5)
+        #     self.view.centerOn(self.pixmap_item)
 
     # ---------------------------- Overlays ---------------------------- #
     def _geo_to_pixel(self, x: float, y: float):
@@ -731,23 +708,40 @@ class TiffViewer(QMainWindow):
 
     # ----------------------- Title / Rendering ----------------------- #
     def update_title(self):
-        """Show correct title for GeoTIFF or NetCDF time series."""
+        """Add band before the title."""
         import os
+        file_name = os.path.basename(self.tif_path)
 
         if hasattr(self, "_has_time_dim") and self._has_time_dim:
-            nc_name = getattr(self, "_nc_var_name", "")
-            file_name = os.path.basename(self.tif_path)
+            # nc_name = getattr(self, "_nc_var_name", "")
+            
             title = f"Time step {self.band_index + 1}/{self.band_count} — {file_name}"
+            
 
         elif hasattr(self, "band_index"):
-            title = f"Band {self.band_index + 1}/{self.band_count} — {os.path.basename(self.tif_path)}"
+            title = f"Band {self.band_index + 1}/{self.band_count} — {file_name}"
 
-        elif self.rgb_mode and self.rgb:
-            # title = f"RGB {self.rgb} — {os.path.basename(self.tif_path)}"
-            title = f"RGB {self.rgb}"
+        elif self.rgb_mode:
+           
+            # Case 1: --rgbfiles → filenames
+            if self.rgbfiles:
+                files = [os.path.basename(p) for p in self.rgbfiles]
+                title = f"RGB ({files[0]}, {files[1]}, {files[2]})"
+
+            # Case 2: --rgb → band numbers
+            elif self.rgb:
+                r, g, b = self.rgb
+                title = f"RGB ({r}, {g}, {b}) — {file_name}"
+
+            else:
+                title = f"RGB — {file_name}"
+
+        elif not self.rgb_mode:
+            # TIFF uses self.band
+            title = f"Band {self.band}/{self.band_count} — {file_name}"
 
         else:
-            title = os.path.basename(self.tif_path)
+            title = {file_name}
 
         print(f"Title: {title}")
         self.setWindowTitle(title)
@@ -794,7 +788,8 @@ class TiffViewer(QMainWindow):
             return frame
 
         step = int(self._scale_arg)
-        print(f"Applying scale factor {step} to current frame")
+        if not hasattr(self, "_suppress_scale_print"):
+            print(f"Applying scale factor {self._scale_arg} to current frame")
 
         # Downsample the frame
         frame = frame[::step, ::step]
@@ -828,10 +823,6 @@ class TiffViewer(QMainWindow):
         # Convert to numpy if it's still an xarray
         if hasattr(frame, "values"):
             frame = frame.values
-
-        # Apply same scaling factor (if any)
-        if hasattr(self, "_scale_arg") and self._scale_arg > 1:
-            step = int(self._scale_arg)
 
         return frame.astype(np.float32)
         
@@ -888,7 +879,7 @@ class TiffViewer(QMainWindow):
             return rgb
 
     def _render_cartopy_map(self, data):
-        """Render a NetCDF variable with cartopy for better geographic visualization"""
+        """ Use cartopy for better visualization"""
         import matplotlib.pyplot as plt
         from matplotlib.backends.backend_agg import FigureCanvasAgg
         import cartopy.crs as ccrs
@@ -903,7 +894,6 @@ class TiffViewer(QMainWindow):
         lats = self._lat_data
         
         # Create contour plot
-        levels = 20
         if hasattr(plt.cm, self.cmap_name):
             cmap = getattr(plt.cm, self.cmap_name)
         else:
@@ -922,8 +912,6 @@ class TiffViewer(QMainWindow):
         norm_data = np.power(norm_data, self.gamma)
         norm_data = norm_data * rng + vmin
         
-        # Downsample coordinates to match downsampled data shape
-        # --- Align coordinates with data shape (no stepping assumptions) ---
         # Downsample coordinates to match downsampled data shape
         data_height, data_width = data.shape[:2]
         lat_samples = len(lats)
@@ -946,27 +934,37 @@ class TiffViewer(QMainWindow):
                 # print("[DEBUG] 2D lat grid ascending → flip lats_downsampled vertically")
                 lats_downsampled = np.flipud(lats_downsampled)
 
-        # Convert 0–360 longitude to −180–180 if needed
-        if lons_downsampled.max() > 180:
-            lons_downsampled = ((lons_downsampled + 180) % 360) - 180
+        # ---- Fix longitude and sort correctly ----
+        lons_ds = lons_downsampled.copy()
 
+        # Convert 0–360 → -180–180 only once
+        if lons_ds.max() > 180:
+            lons_ds = ((lons_ds + 180) % 360) - 180
 
-        # --- Build meshgrid AFTER any flip ---
-        lon_grid, lat_grid = np.meshgrid(lons_downsampled, lats_downsampled, indexing="xy")
+        # Sort and reorder data
+        sort_idx = np.argsort(lons_ds)
+        lons_ds = lons_ds[sort_idx]
+        data = data[:, sort_idx]
 
-        # Use pcolormesh (more stable than contourf for gridded data)
-        img = ax.pcolormesh(
-            lon_grid, lat_grid, data,
-            transform=ccrs.PlateCarree(),
-            cmap=cmap,
-            shading="auto"
+        extent = (
+            float(lons_ds[0]),
+            float(lons_ds[-1]),
+            float(lats_downsampled[-1]),
+            float(lats_downsampled[0])
         )
 
-        # Set extent from the 1D vectors (already flipped if needed)
-        ax.set_extent(
-            [lons_downsampled.min(), lons_downsampled.max(),
-            lats_downsampled.min(), lats_downsampled.max()],
-            crs=ccrs.PlateCarree()
+        vmin = self.vmin if self._user_vmin is not None else np.nanmin(data)
+        vmax = self.vmax if self._user_vmax is not None else np.nanmax(data)
+ 
+ # Changed from pcolormesh to imshow to prevent artefacts when used with cartopy
+        img = ax.imshow(
+            data,
+            extent=extent,
+            transform=ccrs.PlateCarree(),
+            cmap=cmap,
+            interpolation="nearest",
+            vmin=vmin,
+            vmax=vmax
         )
 
         # Add map features
@@ -1004,43 +1002,65 @@ class TiffViewer(QMainWindow):
         
         # Close figure to prevent memory leak
         plt.close(fig)
+        del fig
         
         return rgb
-        
+    
     def update_pixmap(self):
-        # --- Select display data ---
-        if hasattr(self, "band_index"):
-            # HDF or scientific multi-band
-            if self.data.ndim == 3:
-                a = self.data[:, :, self.band_index]
-            else:
-                a = self.data
-            rgb = None
+    # ------------------------------------------------------------------
+    # Select respective data (a = single-band 2D, rgb = RGB array)
+    # ------------------------------------------------------------------
+
+        rgb = None  # ensure defined
+
+        # Case 1: RGB override (GeoTIFF or RGB-files)
+        if self.rgb_mode:
+            rgb = self.data
+            a = None
+
+        # Case 2: Scientific multi-band (NetCDF/HDF)
+        elif hasattr(self, "band_index"):
+            # Always get consistent per-frame 2D data
+            a = self.get_current_frame()
+
+        # Case 3: Regular GeoTIFF single-band
         else:
-            # Regular GeoTIFF (could be RGB or single-band)
-            if self.rgb_mode:  # user explicitly passed --rgb or --rgbtiles
-                rgb = self.data
-                a = None
-            else:
-                a = self.data
-                rgb = None
-        # ----------------------------
+            rgb = None
+            a = self.data
 
         # --- Render image ---
-        # Check if we should use cartopy for NetCDF visualization
+        # Cartopy is only relevant for NetCDF
         use_cartopy = False
-        if hasattr(self, '_use_cartopy') and self._use_cartopy and HAVE_CARTOPY:
-            if hasattr(self, '_has_geo_coords') and self._has_geo_coords:
-                use_cartopy = True
-                
+
+        if hasattr(self, "_nc_var_name"):
+            use_cartopy = (
+                self.cartopy_mode == "on"
+                and HAVE_CARTOPY
+                and getattr(self, "_use_cartopy", False)
+                and getattr(self, "_has_geo_coords", False)
+            )
+
+            # Inform user when cartopy was requested but cannot be used
+            if self.cartopy_mode == "on" and not use_cartopy:
+                if not HAVE_CARTOPY:
+                    print("[INFO] Cartopy not installed — using standard scientific rendering.")
+                elif not getattr(self, "_use_cartopy", False):
+                    print("[INFO] This file lacks geospatial coordinates — cartopy disabled.")
+                elif not getattr(self, "_has_geo_coords", False):
+                    print("[INFO] No lat/lon coordinates found — cartopy disabled.")
+
         if use_cartopy:
-            # Render with cartopy for better geographic visualization
             rgb = self._render_cartopy_map(a)
         elif rgb is None:
-            # Standard grayscale rendering for single-band (scientific) data
+            # Standard grayscale rendering for single-band data
             finite = np.isfinite(a)
-            vmin, vmax = np.nanmin(a), np.nanmax(a)
+
+            # Respect user-specified limits
+            vmin = self._user_vmin if self._user_vmin is not None else np.nanmin(a)
+            vmax = self._user_vmax if self._user_vmax is not None else np.nanmax(a)
+            
             rng = max(vmax - vmin, 1e-12)
+
             norm = np.zeros_like(a, dtype=np.float32)
             if np.any(finite):
                 norm[finite] = (a[finite] - vmin) / rng
@@ -1051,13 +1071,15 @@ class TiffViewer(QMainWindow):
         else:
             # True RGB mode (unchanged)
             rgb = self._render_rgb()
-        # ----------------------
 
         h, w, _ = rgb.shape
         self._last_rgb = rgb
+
         qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888)
         pix = QPixmap.fromImage(qimg)
+        
         if self.pixmap_item is None:
+            
             self.pixmap_item = QGraphicsPixmapItem(pix)
             self.pixmap_item.setZValue(0.0)
             self.scene.addItem(self.pixmap_item)
@@ -1082,6 +1104,7 @@ class TiffViewer(QMainWindow):
             if nd is not None:
                 arr[arr == nd] = np.nan
             self.data = arr
+            
             self.vmin, self.vmax = np.nanmin(arr), np.nanmax(arr)
         self.update_pixmap()
         self.update_title()
@@ -1126,6 +1149,7 @@ class TiffViewer(QMainWindow):
             # For other files, toggle between two colormaps
             else:
                 self.cmap_name, self.alt_cmap_name = self.alt_cmap_name, self.cmap_name
+                print(f"Colormap: {self.cmap_name}")
             self.update_pixmap()
 
         # Band switch
@@ -1186,12 +1210,14 @@ def run_viewer(
     shapefile=None,
     shp_color=None,
     shp_width=None,
-    subset=None
+    subset=None,    
+    vmin=None,
+    vmax=None,
+    cartopy="on",
+    timestep=None
 ):
 
     """Launch the TiffViewer app"""
-    from PySide6.QtCore import Qt
-#     QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
     app = QApplication(sys.argv)
     win = TiffViewer(
         tif_path,
@@ -1202,7 +1228,11 @@ def run_viewer(
         shapefiles=shapefile,
         shp_color=shp_color,
         shp_width=shp_width,
-        subset=subset
+        subset=subset,
+        vmin=vmin,
+        vmax=vmax,
+        cartopy=cartopy,
+        timestep=timestep,
     )
     win.show()
     sys.exit(app.exec())
@@ -1210,17 +1240,34 @@ def run_viewer(
 import click
 
 @click.command()
-@click.version_option("0.2.5", prog_name="viewtif")
+@click.version_option(__version__, prog_name="viewtif")
 @click.argument("tif_path", required=False)
 @click.option("--band", default=1, show_default=True, type=int, help="Band number to display")
 @click.option("--scale", default=1.0, show_default=True, type=int, help="Scale factor for display")
 @click.option("--rgb", nargs=3, type=int, help="Three band numbers for RGB, e.g. --rgb 4 3 2")
 @click.option("--rgbfiles", nargs=3, type=str, help="Three single-band TIFFs for RGB, e.g. --rgbfiles B4.tif B3.tif B2.tif")
 @click.option("--shapefile", multiple=True, type=str, help="One or more shapefiles to overlay")
-@click.option("--shp-color", default="white", show_default=True, help="Overlay color (name or #RRGGBB).")
+@click.option("--shp-color", default="cyan", show_default=True, help="Overlay color (name or #RRGGBB).")
 @click.option("--shp-width", default=1.0, show_default=True, type=float, help="Overlay line width (screen pixels).")
 @click.option("--subset", default=None, type=int, help="Open specific subdataset index in .hdf/.h5 file or variable in NetCDF file")
-def main(tif_path, band, scale, rgb, rgbfiles, shapefile, shp_color, shp_width, subset):
+@click.option("--vmin", type=float, default=None, help="Manual minimum display value")
+@click.option("--vmax", type=float, default=None, help="Manual maximum display value")
+@click.option(
+    "--timestep",
+    type=int,
+    default=None,
+    help="For NetCDF files, jump directly to a specific time index (1-based)."
+)
+@click.option(
+    "--cartopy",
+    type=click.Choice(["on", "off"], case_sensitive=False),
+    default="on",
+    show_default=True,
+    help="Use cartopy for NetCDF geospatial rendering."
+)
+
+
+def main(tif_path, band, scale, rgb, rgbfiles, shapefile, shp_color, shp_width, subset, vmin, vmax, cartopy, timestep):
     """Lightweight GeoTIFF, NetCDF, and HDF viewer."""
     # --- Warn early if shapefile requested but geopandas missing ---
     if shapefile and not HAVE_GEO:
@@ -1239,7 +1286,11 @@ def main(tif_path, band, scale, rgb, rgbfiles, shapefile, shp_color, shp_width, 
         shapefile=shapefile,
         shp_color=shp_color,
         shp_width=shp_width,
-        subset=subset
+        subset=subset,
+        vmin=vmin,
+        vmax=vmax,
+        cartopy=cartopy,
+        timestep=timestep,
     )
 
 if __name__ == "__main__":

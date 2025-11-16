@@ -1,9 +1,7 @@
 # viewtif
 [![Downloads](https://static.pepy.tech/badge/viewtif)](https://pepy.tech/project/viewtif)
 [![PyPI version](https://img.shields.io/pypi/v/viewtif)](https://pypi.org/project/viewtif/)
-[![Python version](https://img.shields.io/badge/python-%3E%3D3.9-blue.svg)](https://pypi.org/project/viewtif/)
-
-
+[![Python version](https://img.shields.io/badge/python-%3E%3D3.10-blue.svg)](https://pypi.org/project/viewtif/)
 
 A lightweight GeoTIFF viewer for quick visualization directly from the command line.  
 
@@ -14,7 +12,7 @@ You can visualize single-band GeoTIFFs, RGB composites, HDF, NetCDF files and sh
 ```bash
 pip install viewtif
 ```
-> **Note:** On Linux, you may need python3-tk, libqt5gui5, or PySide6 dependencies.
+> **Note:** Requires Python 3.10 or higher. On Linux, you may need python3-tk, libqt5gui5, or PySide6 dependencies.
 > 
 >`viewtif` requires a graphical display environment.  
 > It may not run properly on headless systems (e.g., HPC compute nodes or remote servers without X11 forwarding).
@@ -27,19 +25,20 @@ pip install "viewtif[geo]"
 > **Note:** For macOS(zsh) users:
 > Make sure to include the quotes, or zsh will interpret it as a pattern.
 
-#### HDF/HDF5 support 
-```bash
-brew install gdal     # macOS
-sudo apt install gdal-bin python3-gdal  # Linux
-pip install GDAL
-```
-> **Note:** GDAL is required to open `.hdf`, .`h5`, and `.hdf5` files. If it’s missing, viewtif will display: `RuntimeError: HDF support requires GDAL.`
-
 #### NetCDF support 
 ```bash
 pip install  "viewtif[netcdf]"
 ```
 > **Note:** For enhanced geographic visualization with map projections, coastlines, and borders, install with cartopy: `pip install "viewtif[netcdf]"` (cartopy is included in the netcdf extra). If cartopy is not available, netCDF files will still display with standard rendering.
+
+#### HDF/HDF5 & FileGDB support 
+GDAL is required to open `.hdf`, .`h5`, `.hdf5`, and `.gdb` files. 
+```bash
+brew install gdal     # macOS
+sudo apt install gdal-bin python3-gdal  # Linux
+pip install GDAL
+```
+
 ## Quick Start
 ```bash
 # View a GeoTIFF
@@ -51,9 +50,16 @@ viewtif --rgbfiles \
   HLS_B03.tif \
   HLS_B02.tif
 
+# View an RGB composite from a multi-band file
+viewtif rgb.tif --rgb 4 3 2
+
 # View with shapefile overlay
 viewtif ECOSTRESS_LST.tif \
   --shapefile Zip_Codes.shp
+
+# Change the color and width
+viewtif ECOSTRESS_LST.tif \
+  --shapefile Zip_Codes.shp --shp-color red --shp-width 2
 ```
 ### Update in v1.0.6: HDF/HDF5 support
 `viewtif` can open `.hdf`, `.h5`, and `.hdf5` files that contain multiple subdatasets. When opened, it lists available subdatasets and lets you view one by index. You can also specify a band to display (default is the first band) or change bands interactively with '[' and ']'.
@@ -71,11 +77,7 @@ viewtif AG100.v003.33.-107.0001.h5 --subset 1 --band 3
 `[WARN] raster lacks CRS/transform; cannot place overlays.`
 
 ### Update in v1.0.7: File Geodatabase (.gdb) support
-`viewtif` can now open raster datasets stored inside Esri File Geodatabases (`.gdb`). When you open a .gdb directly, `viewtif`` will list available raster datasets first, then you can choose one to view.
-
-Most Rasterio installations already include the OpenFileGDB driver, so .gdb datasets often open without installing GDAL manually.
-
-If you encounter: RuntimeError: GDB support requires GDAL, install GDAL as shown above to enable the driver.
+`viewtif` can now open raster datasets stored inside Esri File Geodatabases (`.gdb`). When you open a .gdb directly, `viewtif` will list available raster datasets first, then you can choose one to view.
 
 ```bash
 # List available raster datasets
@@ -92,11 +94,19 @@ If the dataset is very large (e.g., >20 million pixels), it will pause and warn 
 You can proceed manually or rerun with the `--scale` option for a smaller, faster preview.
 
 ### Update in v0.2.2: NetCDF support with optional cartopy visualization
-`viewtif` now supports NetCDF (`.nc`) files via xarray, with optional cartopy-based geographic visualization. Use`[` / `]` to move forward or backward through time steps.
+`viewtif` now supports NetCDF (`.nc`) files via xarray, with optional cartopy-based geographic visualization. Use `[`  /  `]` to move forward or backward through time steps, and press M to switch between the three built-in colormaps ("RdBu_r", "viridis", "magma").
+
+### Update in v0.2.6: New user controls for NetCDF visualization
+- `--vmin [value] --vmax [value]` let you set the display range (for all file types).
+- `--timestep [int]` lets you jump directly to a chosen time slice.
+- `cartopy off` let you see raw NetCDF images.
 
 #### Examples
 ```bash
 viewtif data.nc
+viewtif data.nc --vmin 280 --vmax 320
+viewtif data.nc --timestep 100
+viewtif data.nc --cartopy off
 ```
 
 ## Controls
@@ -106,7 +116,7 @@ viewtif data.nc
 | Arrow keys or `WASD` | Pan                                     |
 | `C` / `V`            | Increase / decrease contrast            |
 | `G` / `H`            | Increase / decrease gamma               |
-| `M`                  | Toggle colormap (`viridis` ↔ `magma`)   |
+| `M`                  | Toggle colormap. Single-band: viridis/magma. NetCDF: RdBu_r/viridis/magma.   |
 | `[` / `]`            | Previous / next band (or time step)     |
 | `R`                  | Reset view                              |
 
