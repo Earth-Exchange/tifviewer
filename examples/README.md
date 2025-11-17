@@ -12,13 +12,13 @@ viewtif --rgbfiles examples/sample_data/HLS_B4.tif examples/sample_data/HLS_B3.t
 ```
 
 Controls
-| Key                           | Action                                | Mode        |
-| ----------------------------- | ------------------------------------- | ----------- |
-| `+` / `-`                     | Zoom in / out                         | All         |
-| Arrow keys or `W` `A` `S` `D` | Pan                                   | All         |
-| `C` / `V`                     | Decrease / increase contrast          | All         |
-| `G` / `H`                     | Decrease / increase gamma             | All         |
-| `M`                           | Toggle colormap (`viridis` ↔ `magma`) | Single-band |
-| `[` / `]`                     | Previous / next band                  | Single-band |
-| `R`                           | Reset view                            | All         |
+| Key                           | Action                                | 
+| ----------------------------- | ------------------------------------- |
+| `+` / `-`                     | Zoom in / out                         |
+| Arrow keys or `W` `A` `S` `D` | Pan                                   |
+| `C` / `V`                     | Decrease / increase contrast          |
+| `G` / `H`                     | Decrease / increase gamma             |
+| `M`                           | Toggle colormap (`viridis` ↔ `magma`) |
+| `[` / `]`                     | Previous / next band                  |
+| `R`                           | Reset view                            |
 
